@@ -1,7 +1,7 @@
 import { Vector3 } from 'three';
 import type { Roach } from './swarm';
 
-const VOICES = 6;
+const VOICES = 4;
 
 interface Voice {
   source: AudioBufferSourceNode;
@@ -50,8 +50,8 @@ export class RoachAudio {
       source.playbackRate.value = 0.85 + Math.random() * 0.35;
       const filter = ctx.createBiquadFilter();
       filter.type = 'bandpass';
-      filter.frequency.value = 3800 + Math.random() * 2500;
-      filter.Q.value = 0.7;
+      filter.frequency.value = 2600 + Math.random() * 1500;
+      filter.Q.value = 0.5;
       const gain = ctx.createGain();
       gain.gain.value = 0;
       const panner = this.makePanner();
@@ -86,7 +86,8 @@ export class RoachAudio {
 
   private makePanner(): PannerNode {
     const p = this.ctx!.createPanner();
-    p.panningModel = 'HRTF';
+    // Equal-power instead of HRTF: HRTF convolution crackles on mid-range phones while ARCore runs.
+    p.panningModel = 'equalpower';
     p.distanceModel = 'inverse';
     p.refDistance = 0.25;
     p.rolloffFactor = 1.6;
@@ -135,12 +136,12 @@ export class RoachAudio {
       v.panner.positionY.setTargetAtTime(r.position.y, t, 0.03);
       v.panner.positionZ.setTargetAtTime(r.position.z, t, 0.03);
       const level = Math.min(1, r.speed / 0.25) * (0.5 + r.scale * 0.5);
-      v.gain.gain.setTargetAtTime(level * 0.9, t, 0.04);
-      v.source.playbackRate.setTargetAtTime(0.8 + Math.min(0.8, r.speed * 2), t, 0.1);
+      v.gain.gain.setTargetAtTime(level * 0.5, t, 0.06);
+      
     });
 
     // Swarm bed grows with the population.
-    const bedLevel = alive.length <= 6 ? 0 : Math.min(0.45, Math.log10(alive.length / 6) * 0.3);
+    const bedLevel = alive.length <= 6 ? 0 : Math.min(0.25, Math.log10(alive.length / 6) * 0.18);
     this.bed.gain.setTargetAtTime(bedLevel, t, 0.5);
 
     // Occasional hiss from a nearby roach.
@@ -166,10 +167,10 @@ export class RoachAudio {
     const g = ctx.createGain();
     const dur = 0.25 + Math.random() * 0.45;
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.35, t + 0.04);
+    g.gain.linearRampToValueAtTime(0.18, t + 0.04);
     // Two puffs, like a hissing roach pushing air through its spiracles.
-    g.gain.linearRampToValueAtTime(0.12, t + dur * 0.45);
-    g.gain.linearRampToValueAtTime(0.3, t + dur * 0.6);
+    g.gain.linearRampToValueAtTime(0.06, t + dur * 0.45);
+    g.gain.linearRampToValueAtTime(0.15, t + dur * 0.6);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     const p = this.makePanner();
     this.place(p, at);
@@ -241,7 +242,7 @@ function makeScuttleBuffer(ctx: AudioContext): AudioBuffer {
   const sr = ctx.sampleRate;
   const buf = ctx.createBuffer(1, sr * seconds, sr);
   const d = buf.getChannelData(0);
-  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * 0.04; // rustle
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * 0.02; // rustle
   let t = 0;
   while (t < seconds) {
     // Clicks come in little bursts (tripod steps), ~45 per second overall.
@@ -249,7 +250,7 @@ function makeScuttleBuffer(ctx: AudioContext): AudioBuffer {
     for (let k = 0; k < burst; k++) {
       const start = Math.floor((t + k * 0.004) * sr);
       const len = Math.floor(sr * (0.0008 + Math.random() * 0.0015));
-      const amp = 0.25 + Math.random() * 0.75;
+      const amp = 0.15 + Math.random() * 0.35;
       for (let j = 0; j < len && start + j < d.length; j++) {
         d[start + j] += (Math.random() * 2 - 1) * amp * Math.exp((-j / len) * 5);
       }

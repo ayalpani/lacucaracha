@@ -89,7 +89,6 @@ button {
   padding: 8px 14px;
   border-radius: 999px;
   font-weight: 700;
-  backdrop-filter: blur(6px);
 }
 .pill.subtle { font-weight: 500; color: var(--muted); font-size: 14px; }
 
@@ -123,8 +122,22 @@ button {
   border-radius: 50%;
   background: var(--pill);
   font-size: 20px;
-  backdrop-filter: blur(6px);
 }
 .round.big { width: 72px; height: 72px; background: var(--accent); color: var(--accent-fg); font-size: 22px; font-weight: 800; }
 .round:active { transform: scale(0.94); }
 .round.off { opacity: 0.5; }
+
+#count { pointer-events: auto; color: var(--fg); font-size: 16px; }
+.debug {
+  position: absolute;
+  top: calc(max(12px, env(safe-area-inset-top)) + 48px);
+  left: 16px;
+  right: 16px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #9ef0a0;
+  font: 12px/1.4 ui-monospace, Menlo, monospace;
+  white-space: pre-wrap;
+}

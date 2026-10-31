@@ -7,7 +7,7 @@ import {
   InstancedMesh,
   Matrix4,
   MeshBasicMaterial,
-  MeshPhysicalMaterial,
+  MeshStandardMaterial,
   PlaneGeometry,
   Quaternion,
   SphereGeometry,
@@ -18,7 +18,9 @@ import {
 import type { Roach } from './swarm';
 
 const Y = new Vector3(0, 1, 0);
-const SEGMENTS_PER_ROACH = 18; // 6 legs x 2 + 2 antennae x 2 + 2 cerci
+const SEGMENTS_PER_ROACH = 18;
+/** Model is ~3.5 cm long at 1.0; a bit larger reads better through a phone camera. */
+const BODY_SCALE = 1.3; // 6 legs x 2 + 2 antennae x 2 + 2 cerci
 
 interface LegDef {
   hip: Vector3;
@@ -77,20 +79,15 @@ export class RoachRenderer {
   private readonly c = new Vector3();
 
   constructor(private readonly capacity: number) {
-    const chitin = (hex: string, rough: number): MeshPhysicalMaterial =>
-      new MeshPhysicalMaterial({
-        color: new Color(hex),
-        roughness: rough,
-        metalness: 0.05,
-        clearcoat: 1,
-        clearcoatRoughness: 0.3,
-      });
+    // Standard (not physical/clearcoat) material: much cheaper on mobile GPUs.
+    const chitin = (hex: string, rough: number): MeshStandardMaterial =>
+      new MeshStandardMaterial({ color: new Color(hex), roughness: rough, metalness: 0.1 });
 
-    this.abdomen = this.instanced(taperedEllipsoid(), chitin('#5b2a10', 0.42), capacity);
-    this.thorax = this.instanced(new SphereGeometry(1, 14, 8), chitin('#3a1a0b', 0.38), capacity);
-    this.head = this.instanced(new SphereGeometry(1, 10, 6), chitin('#24110a', 0.5), capacity);
+    this.abdomen = this.instanced(taperedEllipsoid(), chitin('#7a3a16', 0.35), capacity);
+    this.thorax = this.instanced(new SphereGeometry(1, 12, 7), chitin('#4e2410', 0.3), capacity);
+    this.head = this.instanced(new SphereGeometry(1, 10, 6), chitin('#2e160b', 0.45), capacity);
     const segGeo = new CylinderGeometry(1, 0.6, 1, 5, 1).translate(0, 0.5, 0);
-    this.segments = this.instanced(segGeo, chitin('#3d1d0d', 0.55), capacity * SEGMENTS_PER_ROACH);
+    this.segments = this.instanced(segGeo, chitin('#4a2410', 0.55), capacity * SEGMENTS_PER_ROACH);
 
     const shadowGeo = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
     const shadowMat = new MeshBasicMaterial({
@@ -137,7 +134,7 @@ export class RoachRenderer {
       this.right.crossVectors(r.normal, this.fwd).normalize();
       this.mRoach.makeBasis(this.right, r.normal, this.fwd);
       this.mRoach.setPosition(r.position);
-      const scale = r.scale;
+      const scale = r.scale * BODY_SCALE;
       this.mRoach.scale(this.s.set(scale, scale, scale));
 
       // Squashed: flatten and fade out by sinking into the surface.
@@ -232,7 +229,7 @@ export class RoachRenderer {
 
 /** Unit sphere, narrower at the back end: reads as a roach abdomen with folded wings. */
 function taperedEllipsoid(): SphereGeometry {
-  const g = new SphereGeometry(1, 18, 10);
+  const g = new SphereGeometry(1, 14, 8);
   const pos = g.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const z = pos.getZ(i);

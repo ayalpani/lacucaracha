@@ -24,6 +24,10 @@ const RING: ReadonlyArray<readonly [number, number]> = [
   [-1, 0],
   [0, 1],
   [0, -1],
+  [0.7, 0.7],
+  [-0.7, 0.7],
+  [0.7, -0.7],
+  [-0.7, -0.7],
 ];
 const tmpT1 = new Vector3();
 const tmpT2 = new Vector3();
@@ -34,15 +38,16 @@ const tmpP = new Vector3();
  * (three.js raycasts) feed it, so roach locomotion is identical in both modes.
  */
 export class SurfelMap {
-  private readonly cells = new Map<string, Surfel[]>();
+  private readonly cells = new Map<number, Surfel[]>();
   private count = 0;
 
   get size(): number {
     return this.count;
   }
 
-  private key(ix: number, iy: number, iz: number): string {
-    return `${ix},${iy},${iz}`;
+  /** Numeric cell key (no string garbage in the hot path); covers ±40 m around the origin. */
+  private key(ix: number, iy: number, iz: number): number {
+    return ((ix + 1024) * 2048 + (iy + 1024)) * 2048 + (iz + 1024);
   }
 
   private cellOf(p: Vector3): [number, number, number] {

@@ -24,11 +24,29 @@ export interface World {
 }
 
 // ---------------------------------------------------------------------------
-// AR: WebXR hit tests (ARCore planes, horizontal and vertical).
+// AR: WebXR hit tests (ARCore planes, horizontal and vertical), plus
+// detected plane polygons when the browser offers plane detection.
 // ---------------------------------------------------------------------------
 
-const FAN_X = [-0.5, -0.25, 0, 0.25, 0.5];
-const FAN_Y = [-0.8, -0.5, -0.25, 0, 0.25, 0.5];
+// Few rays: every hit-test source costs an ARCore raycast per frame.
+const FAN: ReadonlyArray<readonly [number, number]> = [
+  [-0.35, -0.6],
+  [0.35, -0.6],
+  [0, -0.35],
+  [-0.4, -0.1],
+  [0.4, -0.1],
+  [-0.2, 0.2],
+  [0.2, 0.2],
+  [0, 0.45],
+];
+
+/** Live numbers for the on-screen diagnostics. */
+export interface ArStats {
+  sources: number;
+  hitsLastFrame: number;
+  planes: number;
+  error: string;
+}
 
 export class ArWorld implements World {
   private readonly sources: XRHitTestSource[] = [];
@@ -38,6 +56,8 @@ export class ArWorld implements World {
   private readonly n = new Vector3();
   private readonly q = new Quaternion();
   private readonly s = new Vector3();
+  private readonly planeSeen = new WeakMap<XRPlane, number>();
+  readonly stats: ArStats = { sources: 0, hitsLastFrame: 0, planes: 0, error: '' };
 
   private constructor(
     private readonly map: SurfelMap,
@@ -51,26 +71,82 @@ export class ArWorld implements World {
   ): Promise<ArWorld> {
     const world = new ArWorld(map, getRefSpace);
     const viewer = await session.requestReferenceSpace('viewer');
-    const request = (x: number, y: number): Promise<XRHitTestSource | undefined> => {
+    const request = async (x: number, y: number): Promise<XRHitTestSource | null> => {
+      if (!session.requestHitTestSource) return null;
       const offsetRay = new XRRay({ x: 0, y: 0, z: 0, w: 1 }, { x, y, z: -1, w: 0 });
-      return session.requestHitTestSource?.({ space: viewer, offsetRay, entityTypes: ['plane'] }) ?? Promise.resolve(undefined);
+      try {
+        return (await session.requestHitTestSource({ space: viewer, offsetRay, entityTypes: ['plane'] })) ?? null;
+      } catch {
+        // Some browsers reject entityTypes; fall back to the default.
+        try {
+          return (await session.requestHitTestSource({ space: viewer, offsetRay })) ?? null;
+        } catch (err) {
+          world.stats.error = `hit-test: ${(err as Error).message}`;
+          return null;
+        }
+      }
     };
-    world.center = (await request(0, 0)) ?? null;
-    const fan = await Promise.allSettled(FAN_X.flatMap((x) => FAN_Y.map((y) => request(x, y))));
-    for (const r of fan) if (r.status === 'fulfilled' && r.value) world.sources.push(r.value);
+    world.center = await request(0, 0);
+    const fan = await Promise.all(FAN.map(([x, y]) => request(x, y)));
+    for (const src of fan) if (src) world.sources.push(src);
+    world.stats.sources = world.sources.length + (world.center ? 1 : 0);
     return world;
   }
 
   scan(now: number, frame: XRFrame | null): SurfaceSample | null {
     const ref = this.getRefSpace();
     if (!frame || !ref) return null;
+    let hits = 0;
     for (const src of this.sources) {
       const hit = this.read(frame, src, ref);
-      if (hit) this.map.addPatch(hit.position, hit.normal, now);
+      if (hit) {
+        this.map.addPatch(hit.position, hit.normal, now, 0.06);
+        hits++;
+      }
     }
     const c = this.center ? this.read(frame, this.center, ref) : null;
-    if (c) this.map.addPatch(c.position, c.normal, now);
-    return c ? { position: c.position.clone(), normal: c.normal.clone() } : null;
+    const result = c ? { position: c.position.clone(), normal: c.normal.clone() } : null;
+    if (result) {
+      this.map.addPatch(result.position, result.normal, now, 0.06);
+      hits++;
+    }
+    this.stats.hitsLastFrame = hits;
+    this.scanPlanes(frame, ref, now);
+    return result;
+  }
+
+  /** Fill whole detected planes (floor, table tops, walls) when plane detection is available. */
+  private scanPlanes(frame: XRFrame, ref: XRReferenceSpace, now: number): void {
+    const planes = frame.detectedPlanes;
+    if (!planes) return;
+    this.stats.planes = planes.size;
+    let budget = 2; // planes refreshed per frame, keeps frame time flat
+    for (const plane of planes) {
+      if (budget <= 0) break;
+      if (this.planeSeen.get(plane) === plane.lastChangedTime) continue;
+      const pose = frame.getPose(plane.planeSpace, ref);
+      if (!pose) continue;
+      this.planeSeen.set(plane, plane.lastChangedTime);
+      budget--;
+      this.m.fromArray(pose.transform.matrix);
+      this.n.set(0, 1, 0).transformDirection(this.m);
+      const poly = plane.polygon;
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const v of poly) {
+        minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
+        minZ = Math.min(minZ, v.z); maxZ = Math.max(maxZ, v.z);
+      }
+      const step = 0.05;
+      let added = 0;
+      for (let x = minX; x <= maxX && added < 1500; x += step) {
+        for (let z = minZ; z <= maxZ && added < 1500; z += step) {
+          if (!insidePolygon(x, z, poly)) continue;
+          this.p.set(x, 0, z).applyMatrix4(this.m);
+          this.map.add(this.p, this.n, now);
+          added++;
+        }
+      }
+    }
   }
 
   private read(frame: XRFrame, src: XRHitTestSource, ref: XRReferenceSpace): SurfaceSample | null {
@@ -99,6 +175,16 @@ export class ArWorld implements World {
     this.center?.cancel();
     this.sources.length = 0;
   }
+}
+
+function insidePolygon(x: number, z: number, poly: readonly DOMPointReadOnly[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const a = poly[i];
+    const b = poly[j];
+    if (a.z > z !== b.z > z && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) inside = !inside;
+  }
+  return inside;
 }
 
 // ---------------------------------------------------------------------------
