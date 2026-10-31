@@ -4,6 +4,7 @@ import {
   CylinderGeometry,
   DynamicDrawUsage,
   Group,
+  InstancedBufferAttribute,
   InstancedMesh,
   Matrix4,
   MeshBasicMaterial,
@@ -17,6 +18,7 @@ import {
   type Material,
 } from 'three';
 import { withOcclusion } from './occlusion';
+import { swarmMaterial, type RoachModel } from './roachModel';
 import type { Roach } from './swarm';
 
 const Y = new Vector3(0, 1, 0);
@@ -74,6 +76,9 @@ export class RoachRenderer {
   private readonly segments: InstancedMesh;
   private readonly shadows: InstancedMesh;
   private readonly stains: InstancedMesh;
+  private readonly procedural: InstancedMesh[];
+  /** Loaded GLB model (one instanced mesh per material), replaces the procedural parts when set. */
+  private model: { meshes: InstancedMesh[]; anim: InstancedBufferAttribute } | null = null;
 
   private readonly mRoach = new Matrix4();
   private readonly mLocal = new Matrix4();
@@ -113,6 +118,32 @@ export class RoachRenderer {
     );
     this.stains = this.instanced(shadowGeo, stainMat, capacity);
     this.stains.renderOrder = -1;
+    this.procedural = [this.wings, this.pronotum, this.head, this.belly, this.segments];
+  }
+
+  /** Swap in a GLB roach (or null for the built-in procedural one). */
+  setModel(model: RoachModel | null): void {
+    if (this.model) {
+      for (const m of this.model.meshes) {
+        this.group.remove(m);
+        (m.material as { dispose(): void }).dispose();
+      }
+      this.model = null;
+    }
+    for (const m of this.procedural) m.visible = !model;
+    if (!model) return;
+    const anim = new InstancedBufferAttribute(new Float32Array(this.capacity * 3), 3);
+    anim.setUsage(DynamicDrawUsage);
+    const meshes = model.parts.map((p) => {
+      const geo = p.geometry.clone();
+      geo.setAttribute('aAnim', anim);
+      return this.instanced(geo, swarmMaterial(p.material, model), this.capacity);
+    });
+    this.model = { meshes, anim };
+  }
+
+  get usingModel(): boolean {
+    return this.model !== null;
   }
 
   private instanced(geo: BufferGeometry, mat: Material, count: number): InstancedMesh {
@@ -162,6 +193,16 @@ export class RoachRenderer {
         const grow = Math.min(1, squashT * 6);
         this.mLocal.makeScale(0.05 * grow, 1, 0.055 * grow).setPosition(0, 0.0008, 0);
         this.stains.setMatrixAt(stain++, this.mOut.multiplyMatrices(this.mRoach, this.mLocal));
+      }
+
+      if (this.model) {
+        const by = lift * flat - sink;
+        this.mLocal.makeScale(wide, flat, wide).setPosition(0, by - 0.0018 * flat, 0);
+        this.mOut.multiplyMatrices(this.mRoach, this.mLocal);
+        for (const m of this.model.meshes) m.setMatrixAt(body, this.mOut);
+        this.model.anim.setXYZ(body, r.gait, moving, r.antennaPhase);
+        body++;
+        continue;
       }
 
       // Legs: femur, tibia, tarsus.
@@ -217,10 +258,11 @@ export class RoachRenderer {
       body++;
     }
 
-    for (const m of [this.wings, this.pronotum, this.head, this.belly, this.shadows]) {
+    for (const m of [this.wings, this.pronotum, this.head, this.belly, this.shadows, ...(this.model?.meshes ?? [])]) {
       m.count = body;
       m.instanceMatrix.needsUpdate = true;
     }
+    if (this.model) this.model.anim.needsUpdate = true;
     this.segments.count = seg;
     this.segments.instanceMatrix.needsUpdate = true;
     this.stains.count = stain;

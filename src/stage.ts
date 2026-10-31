@@ -2,20 +2,17 @@
  * Stage: a non-AR viewer to inspect the roach from every side in each behaviour state.
  * The roach stands still at the origin and the ground scrolls underneath it (treadmill),
  * so the camera can orbit freely while it "walks". Shows the procedural model used in
- * the AR app, or a loaded GLB (file picker, ?model=URL, or ./models/roach.glb if present).
+ * the AR app, or a GLB model animated exactly like in AR (RoachRenderer.setModel). A GLB picked
+ * here is saved on the device (modelStore) so the AR app uses it too.
  */
 import {
   AmbientLight,
-  AnimationMixer,
-  Box3,
   CanvasTexture,
   Color,
   DirectionalLight,
   Fog,
-  Group,
   HemisphereLight,
   MathUtils,
-  Matrix4,
   Mesh,
   MeshStandardMaterial,
   PerspectiveCamera,
@@ -27,14 +24,19 @@ import {
   SRGBColorSpace,
   Vector3,
   WebGLRenderer,
-  type AnimationAction,
-  type AnimationClip,
-  type Object3D,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RoachRenderer } from './roachRenderer';
+import { loadRoachModel, type RoachModel } from './roachModel';
+import {
+  BUNDLED_URL,
+  clearCustomModel,
+  getOrientation,
+  readCustomModelData,
+  saveCustomModel,
+  setOrientation,
+} from './modelStore';
 import type { Roach, RoachMode } from './swarm';
 import './style.css';
 import './stage.css';
@@ -53,19 +55,17 @@ interface StateDef {
   turn: number;
   surface: SurfaceId;
   mode: RoachMode;
-  /** Substrings tried in order to find a matching GLB animation clip. */
-  clipHints: string[];
 }
 
 const STATES: StateDef[] = [
-  { id: 'idle', label: 'Warten', speed: 0, turn: 0, surface: 'floor', mode: 'pause', clipHints: ['idle', 'wait', 'rest', 'stand'] },
-  { id: 'sneak', label: 'Schleichen', speed: 0.07, turn: 0, surface: 'floor', mode: 'run', clipHints: ['sneak', 'walk', 'crawl'] },
-  { id: 'walk', label: 'Laufen', speed: 0.18, turn: 0, surface: 'floor', mode: 'run', clipHints: ['walk', 'crawl'] },
-  { id: 'flee', label: 'Flucht', speed: 0.45, turn: 0, surface: 'floor', mode: 'flee', clipHints: ['run', 'flee', 'sprint', 'walk'] },
-  { id: 'turn', label: 'Drehen', speed: 0.06, turn: 2.6, surface: 'floor', mode: 'run', clipHints: ['turn', 'walk'] },
-  { id: 'climb', label: 'Klettern', speed: 0.12, turn: 0, surface: 'wall', mode: 'run', clipHints: ['climb', 'walk'] },
-  { id: 'squash', label: 'Zerquetscht', speed: 0, turn: 0, surface: 'floor', mode: 'pause', clipHints: ['squash', 'death', 'die', 'dead'] },
-  { id: 'auto', label: 'Wie in der App', speed: 0, turn: 0, surface: 'floor', mode: 'run', clipHints: [] },
+  { id: 'idle', label: 'Warten', speed: 0, turn: 0, surface: 'floor', mode: 'pause' },
+  { id: 'sneak', label: 'Schleichen', speed: 0.07, turn: 0, surface: 'floor', mode: 'run' },
+  { id: 'walk', label: 'Laufen', speed: 0.18, turn: 0, surface: 'floor', mode: 'run' },
+  { id: 'flee', label: 'Flucht', speed: 0.45, turn: 0, surface: 'floor', mode: 'flee' },
+  { id: 'turn', label: 'Drehen', speed: 0.06, turn: 2.6, surface: 'floor', mode: 'run' },
+  { id: 'climb', label: 'Klettern', speed: 0.12, turn: 0, surface: 'wall', mode: 'run' },
+  { id: 'squash', label: 'Zerquetscht', speed: 0, turn: 0, surface: 'floor', mode: 'pause' },
+  { id: 'auto', label: 'Wie in der App', speed: 0, turn: 0, surface: 'floor', mode: 'run' },
 ];
 const stateById = new Map(STATES.map((s) => [s.id, s]));
 
@@ -167,109 +167,57 @@ const roach: Roach = {
 
 // --- models -----------------------------------------------------------------
 
+/** One renderer per model, drawn exactly as the AR app draws it. */
 interface StageModel {
   readonly label: string;
-  readonly object: Object3D;
-  update(r: Roach, state: StateDef, dt: number): void;
+  readonly view: RoachRenderer;
+  /** Kept for GLBs so the orientation can be fixed and the model reloaded. */
+  readonly source?: { data: ArrayBuffer; name: string; custom: boolean };
 }
 
-class ProceduralModel implements StageModel {
-  readonly label = 'Prozedural';
-  private readonly view = new RoachRenderer(1);
-  readonly object = this.view.group;
-  update(r: Roach): void {
-    this.view.update([r]);
-  }
+function makeModel(rm: RoachModel | null, source?: StageModel['source']): StageModel {
+  const view = new RoachRenderer(1);
+  view.setModel(rm);
+  return { label: rm ? rm.name.replace(/\.(glb|gltf)$/i, '') : 'Prozedural', view, source };
 }
 
-/** Target body length for GLBs whose size isn't plausible in metres. */
-const GLB_LENGTH = 0.045;
-
-class GlbModel implements StageModel {
-  readonly object = new Group();
-  private readonly mixer: AnimationMixer;
-  private current: AnimationAction | null = null;
-  private currentState: StateId | null = null;
-  private readonly basis = new Matrix4();
-  private readonly right = new Vector3();
-
-  constructor(
-    readonly label: string,
-    root: Object3D,
-    private readonly clips: AnimationClip[],
-  ) {
-    // Normalise: glTF faces +Z with +Y up. Feet on y=0, centred on the origin.
-    const box = new Box3().setFromObject(root);
-    const size = box.getSize(new Vector3());
-    const length = Math.max(size.x, size.z);
-    const scale = length > 0.015 && length < 0.12 ? 1 : GLB_LENGTH / (length || 1);
-    root.scale.multiplyScalar(scale);
-    box.setFromObject(root);
-    const c = box.getCenter(new Vector3());
-    root.position.sub(new Vector3(c.x, box.min.y, c.z));
-    this.object.add(root);
-    this.object.matrixAutoUpdate = false;
-    this.mixer = new AnimationMixer(root);
-  }
-
-  update(r: Roach, state: StateDef, dt: number): void {
-    this.right.crossVectors(r.normal, r.heading).normalize();
-    this.basis.makeBasis(this.right, r.normal, r.heading).setPosition(r.position);
-    const s = r.scale;
-    this.object.matrix.copy(this.basis).scale(new Vector3(s, s, s));
-    this.object.matrixWorldNeedsUpdate = true;
-
-    if (state.id !== this.currentState) {
-      this.currentState = state.id;
-      const clip = pickClip(this.clips, state.clipHints);
-      if (clip !== this.current?.getClip()) {
-        const next = clip ? this.mixer.clipAction(clip) : null;
-        next?.reset().play();
-        if (this.current && next) this.current.crossFadeTo(next, 0.2, false);
-        else this.current?.stop();
-        this.current = next;
-      }
-    }
-    if (this.current) {
-      // Locomotion clips play faster the faster the roach goes; others at normal speed.
-      const loco = r.speed > 0.001 && state.speed > 0;
-      this.current.timeScale = loco ? MathUtils.clamp(r.speed / 0.18, 0.3, 3) : 1;
-    }
-    this.mixer.update(dt);
-  }
-}
-
-function pickClip(clips: AnimationClip[], hints: string[]): AnimationClip | null {
-  for (const h of hints) {
-    const c = clips.find((clip) => clip.name.toLowerCase().includes(h));
-    if (c) return c;
-  }
-  return clips[0] ?? null;
-}
-
-const models: StageModel[] = [new ProceduralModel()];
-let model: StageModel = models[0];
-scene.add(model.object);
+const procedural = makeModel(null);
+let glb: StageModel | null = null;
+let model: StageModel = procedural;
+scene.add(model.view.group);
 
 function setModel(m: StageModel): void {
-  scene.remove(model.object);
+  scene.remove(model.view.group);
   model = m;
-  scene.add(m.object);
+  scene.add(m.view.group);
   ui.model.textContent = `Modell: ${m.label}`;
+  for (const el of ui.glbOnly) el.classList.toggle('hidden', !m.source);
+  ui.builtin.classList.toggle('hidden', !m.source?.custom);
 }
 
-const loader = new GLTFLoader();
-async function loadGlb(url: string, label: string, quiet = false): Promise<void> {
+function setGlb(m: StageModel | null): void {
+  if (glb && glb !== m) glb.view.setModel(null);
+  glb = m;
+  setModel(m ?? procedural);
+}
+
+async function loadGlb(data: ArrayBuffer, name: string, custom: boolean): Promise<void> {
   try {
-    const gltf = await loader.loadAsync(url);
-    const m = new GlbModel(label, gltf.scene, gltf.animations);
-    models.push(m);
-    setModel(m);
-    const names = gltf.animations.map((a) => a.name).join(', ');
-    flash(names ? `${label}: Animationen ${names}` : `${label}: keine Animationen`);
+    // loadRoachModel may keep views into the buffer: give it its own copy.
+    const rm = await loadRoachModel(data.slice(0), name, getOrientation(name));
+    setGlb(makeModel(rm, { data, name, custom }));
+    flash(`${model.label}: ${rm.triangles.toLocaleString('de-DE')} Dreiecke`);
   } catch (err) {
-    if (!quiet) flash(`GLB konnte nicht geladen werden: ${(err as Error).message}`);
+    flash(`GLB konnte nicht geladen werden: ${(err as Error).message}`);
   }
+}
+
+function turnModel(dYaw: number, dPitch: number): void {
+  if (!glb?.source) return;
+  const { data, name, custom } = glb.source;
+  const o = getOrientation(name);
+  setOrientation(name, { yaw: (o.yaw + dYaw) % 4, pitch: (o.pitch + dPitch) % 4 });
+  void loadGlb(data, name, custom);
 }
 
 // --- UI ----------------------------------------------------------------------
@@ -287,6 +235,10 @@ const ui = {
   ground: $('t-ground'),
   model: $('t-model'),
   file: $<HTMLInputElement>('glb-file'),
+  glbOnly: [...document.querySelectorAll<HTMLElement>('.glb-only')],
+  yaw: $('t-yaw'),
+  pitch: $('t-pitch'),
+  builtin: $('t-builtin'),
   panel: $('panel'),
   panelToggle: $('panel-toggle'),
 };
@@ -345,18 +297,32 @@ ui.ground.addEventListener('click', () => {
   updateSurfaces();
 });
 ui.model.addEventListener('click', () => {
-  if (models.length === 1) {
+  if (!glb) {
     ui.file.click();
     return;
   }
-  setModel(models[(models.indexOf(model) + 1) % models.length]);
+  setModel(model === glb ? procedural : glb);
 });
-ui.file.addEventListener('change', () => {
+ui.file.addEventListener('change', async () => {
   const f = ui.file.files?.[0];
-  if (!f) return;
-  const url = URL.createObjectURL(f);
-  void loadGlb(url, f.name.replace(/\.(glb|gltf)$/i, '')).finally(() => URL.revokeObjectURL(url));
   ui.file.value = '';
+  if (!f) return;
+  const data = await f.arrayBuffer();
+  await loadGlb(data, f.name, true);
+  // Remember it on this device so the AR app uses the same roach.
+  if (glb?.source?.name === f.name) await saveCustomModel(data, f.name).catch(() => flash('Konnte Modell nicht speichern'));
+});
+ui.yaw.addEventListener('click', () => turnModel(1, 0));
+ui.pitch.addEventListener('click', () => turnModel(0, 1));
+ui.builtin.addEventListener('click', async () => {
+  // Forget the device's own model: back to the bundled GLB, or the procedural roach.
+  await clearCustomModel().catch(() => undefined);
+  const bundled = await fetchBundledData();
+  if (bundled) await loadGlb(bundled, 'roach.glb', false);
+  else {
+    setGlb(null);
+    flash('Eingebaute Kakerlake aktiv');
+  }
 });
 ui.panelToggle.addEventListener('click', () => {
   const hidden = ui.panel.classList.toggle('collapsed');
@@ -517,7 +483,7 @@ function frame(now: number): void {
   }
   controls.update(realDt);
 
-  model.update(roach, active, dt);
+  model.view.update([roach]);
   if (now - lastInfo > 250) {
     lastInfo = now;
     updateInfo();
@@ -545,10 +511,30 @@ resize();
 camera.position.normalize().multiplyScalar(fitDistance());
 renderer.setAnimationLoop(frame);
 
-// A GLB from the URL, or the project's default model once one is committed.
+// Show the same model the AR app will use: ?model=URL, else the device's own GLB, else public/models/roach.glb.
+async function fetchBundledData(url = BUNDLED_URL): Promise<ArrayBuffer | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    return buf.byteLength > 12 && new Uint32Array(buf, 0, 1)[0] === 0x46546c67 ? buf : null; // "glTF"
+  } catch {
+    return null;
+  }
+}
 const modelParam = params.get('model');
-if (modelParam) void loadGlb(modelParam, modelParam.split('/').pop()!.replace(/\.(glb|gltf)$/i, ''));
-else void loadGlb('./models/roach.glb', 'roach.glb', true).then(() => setModel(models[0]));
+if (modelParam) {
+  void fetchBundledData(modelParam).then((d) =>
+    d ? loadGlb(d, modelParam.split('/').pop() || 'model.glb', false) : flash('GLB unter ?model= nicht gefunden'),
+  );
+} else {
+  void (async () => {
+    const custom = await readCustomModelData();
+    if (custom) return loadGlb(custom.data, custom.name, true);
+    const bundled = await fetchBundledData();
+    if (bundled) return loadGlb(bundled, 'roach.glb', false);
+  })();
+}
 
 // Expose for automated tests.
 (window as unknown as { __stage: unknown }).__stage = { roach, selectState: (id: StateId) => selectState(stateById.get(id)!), goToView };
