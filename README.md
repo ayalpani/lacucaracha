@@ -11,6 +11,10 @@ Dieser Stand ist ein **WebXR-Prototyp** (TypeScript, three.js, Vite). Er läuft 
 - `+🪳` mehr Kakerlaken, `⏸` Vermehrung anhalten, `🔊` Ton, `✕` beenden.
 - **Demo ohne AR**: virtuelles Wohnzimmer zum Testen am Rechner (Ziehen dreht die Kamera).
 
+## Stage (Modell-Vorschau)
+
+`stage.html` zeigt eine einzelne Kakerlake ohne AR: drehen/zoomen per Maus oder Finger, Ansichten (Schräg, Oben, Seite, Vorne, Hinten, Unten), Zustände (Warten, Schleichen, Laufen, Flucht, Drehen, Klettern, Zerquetscht, Wie in der App), Zeitlupe und Größe. Der Boden läuft wie ein Laufband unter dem Tier. Eine GLB lässt sich per Dateiauswahl, `?model=URL` oder als `public/models/roach.glb` laden; Animation-Clips werden nach Namen (idle, walk, run, turn, climb, squash) dem Zustand zugeordnet. URL-Parameter `?state=walk` wählt den Startzustand.
+
 ## Entwicklung
 
 ```bash
