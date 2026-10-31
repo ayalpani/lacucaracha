@@ -14,3 +14,4 @@ GitHub Pages ist unter *Settings → Pages → Source: GitHub Actions* aktiviert
 | WebXR-Prototyp (Krabbeln, Vermehren, Sounds, Zerquetschen) | | ✓ seit 2026-10-31 | |
 | Fix A54: doppelte Bildschleife, Performance, leiserer Ton, Diagnose-Anzeige | | ✓ seit 2026-10-31 | |
 | Tiefenmessung, Verdeckung, Laufen nur auf echten Flächen, realistischeres Modell | | ✓ seit 2026-10-31 | |
+| App kann echtes 3D-Modell (GLB) laden, Beine/Fühler animiert; ohne Datei weiter die eingebaute Kakerlake | | ✓ seit 2026-10-31 | |

@@ -19,6 +19,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { RoachAudio } from './audio';
 import { occlusionUniforms } from './occlusion';
+import { loadActiveModel } from './modelStore';
 import { RoachRenderer } from './roachRenderer';
 import { SurfelMap, type SurfaceSample } from './surfaces';
 import { Swarm } from './swarm';
@@ -91,6 +92,15 @@ const map = new SurfelMap();
 const swarm = new Swarm(map, { maxRoaches: MAX_ROACHES, breedInterval: 9 });
 const roachView = new RoachRenderer(MAX_ROACHES + 40);
 scene.add(roachView.group);
+// Use a real 3D model (GLB) when one is available, otherwise the procedural roach.
+let modelInfo = 'prozedural';
+loadActiveModel()
+  .then((model) => {
+    if (!model) return;
+    roachView.setModel(model);
+    modelInfo = `${model.name} (${Math.round(model.triangles)} Dreiecke)`;
+  })
+  .catch((err) => showError(err));
 const audio = new RoachAudio();
 
 // --- state -----------------------------------------------------------------
@@ -314,7 +324,7 @@ function tick(now: number, dt: number, frame: XRFrame | null): void {
       ui.debug.textContent =
         `${fps.toFixed(0)} fps · Flächenpunkte ${map.size}` +
         (st ? ` · Hits ${st.hitsLastFrame}/${st.sources} · Ebenen ${st.planes} · Tiefe ${st.depth ? `ja (${st.depthSamples})` : 'nein'}` : '') +
-        ` · Tiere ${n}` +
+        ` · Tiere ${n} · Modell ${modelInfo}` +
         (lastErr ? `\n⚠ ${lastErr}` : st?.error ? `\n⚠ ${st.error}` : '');
     }
   }

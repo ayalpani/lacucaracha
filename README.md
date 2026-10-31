@@ -38,3 +38,19 @@ USB-Debugging am A54 an, in Chrome am Mac `chrome://inspect` → *Port forwardin
 ## Nächste Schritte
 
 - Native App mit Unity AR Foundation für Android und iOS (Play Store / App Store)
+
+## Eigenes 3D-Modell (GLB)
+
+Die App nimmt das erste verfügbare Modell:
+1. ein auf dem Gerät gespeichertes eigenes Modell (IndexedDB, `saveCustomModel` in `src/modelStore.ts`),
+2. `public/models/roach.glb`,
+3. sonst die eingebaute, prozedurale Kakerlake.
+
+Das GLB darf statisch sein. `src/roachModel.ts` legt alle Meshes zusammen, skaliert auf 3,6 cm Körperlänge,
+stellt die Füße auf den Boden, dreht die lange Achse nach vorn und animiert Beine (Dreifuß-Gang) und Fühler
+im Vertex-Shader. Falsch herum? `setOrientation(name, { yaw, pitch })` (Vierteldrehungen).
+
+Weg vom Bild zum Modell:
+1. Konzeptbild mit einem Bild-Modell erzeugen (einzelne Kakerlake, 3/4-Ansicht von oben, neutraler Hintergrund).
+2. Image-to-3D: z. B. Meshy (meshy.ai), Tripo (tripo3d.ai) oder Hunyuan3D. Low-poly ~5.000 Dreiecke, Textur an, Export GLB.
+3. Datei als `public/models/roach.glb` committen. Test-Modell zum Ausprobieren: `node tests/make-test-glb.mjs out.glb`.
