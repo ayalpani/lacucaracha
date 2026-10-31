@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#120c08" />
+    <title>La Cucaracha</title>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+
+    <section id="start" class="screen">
+      <div class="card">
+        <div class="logo" aria-hidden="true">🪳</div>
+        <h1>La Cucaracha</h1>
+        <p class="lead">Halte dein Handy auf den Boden, Möbel oder die Wand. Dann warte einen Moment …</p>
+        <button id="btn-ar" class="primary" disabled>AR wird geprüft …</button>
+        <button id="btn-demo" class="secondary">Demo ohne AR</button>
+        <p id="ar-hint" class="hint"></p>
+        <p class="fine">Nur zum Spaß. Kein echtes Ungeziefer wurde verletzt.</p>
+      </div>
+    </section>
+
+    <section id="hud" class="hidden">
+      <div class="top">
+        <div class="pill" id="count">🪳 0</div>
+        <div class="pill subtle" id="status">Scanne die Umgebung …</div>
+      </div>
+      <div id="reticle-hint" class="center-hint">Bewege das Handy langsam</div>
+      <div class="bottom">
+        <button id="btn-mute" class="round" aria-label="Ton an/aus">🔊</button>
+        <button id="btn-more" class="round big" aria-label="Mehr Kakerlaken">+🪳</button>
+        <button id="btn-pause" class="round" aria-label="Vermehrung pausieren">⏸</button>
+        <button id="btn-exit" class="round" aria-label="Beenden">✕</button>
+      </div>
+    </section>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
