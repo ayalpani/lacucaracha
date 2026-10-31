@@ -12,6 +12,7 @@ import {
   Vector3,
   type Object3D,
 } from 'three';
+import { DepthScanner } from './depth';
 import type { SurfaceSample, SurfelMap } from './surfaces';
 
 /** Feeds the surfel map from the environment and reports the surface under the screen centre. */
@@ -45,6 +46,8 @@ export interface ArStats {
   sources: number;
   hitsLastFrame: number;
   planes: number;
+  depth: boolean;
+  depthSamples: number;
   error: string;
 }
 
@@ -57,7 +60,8 @@ export class ArWorld implements World {
   private readonly q = new Quaternion();
   private readonly s = new Vector3();
   private readonly planeSeen = new WeakMap<XRPlane, number>();
-  readonly stats: ArStats = { sources: 0, hitsLastFrame: 0, planes: 0, error: '' };
+  readonly stats: ArStats = { sources: 0, hitsLastFrame: 0, planes: 0, depth: false, depthSamples: 0, error: '' };
+  readonly depth = new DepthScanner();
 
   private constructor(
     private readonly map: SurfelMap,
@@ -100,18 +104,25 @@ export class ArWorld implements World {
     for (const src of this.sources) {
       const hit = this.read(frame, src, ref);
       if (hit) {
-        this.map.addPatch(hit.position, hit.normal, now, 0.06);
+        this.map.addPatch(hit.position, hit.normal, now, 0.03);
         hits++;
       }
     }
     const c = this.center ? this.read(frame, this.center, ref) : null;
     const result = c ? { position: c.position.clone(), normal: c.normal.clone() } : null;
     if (result) {
-      this.map.addPatch(result.position, result.normal, now, 0.06);
+      this.map.addPatch(result.position, result.normal, now, 0.03);
       hits++;
     }
     this.stats.hitsLastFrame = hits;
     this.scanPlanes(frame, ref, now);
+    try {
+      this.depth.update(frame, ref, this.map, now);
+    } catch (err) {
+      this.stats.error = `depth: ${(err as Error).message}`;
+    }
+    this.stats.depth = this.depth.active;
+    this.stats.depthSamples = this.depth.samplesLastScan;
     return result;
   }
 
@@ -235,10 +246,23 @@ export class DemoWorld implements World {
     this.box(1.8, 2.0, 0.45, -0.9, 1.0, -1.77, '#c9b79c');
     // Low sideboard on the left wall.
     this.box(0.45, 0.6, 1.2, -1.77, 0.3, 0.6, '#8c6f52');
+    // Upholstered chair: thin legs, seat, backrest.
+    for (const [x, z] of [
+      [0.75, 0.35],
+      [1.17, 0.35],
+      [0.75, 0.77],
+      [1.17, 0.77],
+    ]) {
+      this.box(0.03, 0.45, 0.03, x, 0.225, z, '#3b2a1d');
+    }
+    this.box(0.48, 0.08, 0.48, 0.96, 0.49, 0.56, '#6d7c6a');
+    this.box(0.48, 0.45, 0.06, 0.96, 0.75, 0.8, '#6d7c6a');
+    // Plant pot.
+    this.box(0.26, 0.3, 0.26, -1.3, 0.15, -0.9, '#b5653d');
   }
 
   scan(now: number): SurfaceSample | null {
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 120; i++) {
       this.ndc.set(Math.random() * 1.8 - 0.9, Math.random() * 1.8 - 0.9);
       const hit = this.cast();
       if (hit) this.map.addPatch(hit.position, hit.normal, now);

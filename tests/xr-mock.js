@@ -1,4 +1,5 @@
-// Minimal immersive-ar mock: viewer slowly pans over a floor at y=-1.3 and a wall at z=-2.2.
+// Minimal immersive-ar mock: viewer slowly pans over a floor at y=-1.3, a wall at z=-2.2
+// and a 10 cm pillar (for depth/occlusion), with hit tests and CPU depth sensing.
 (() => {
   const FLOOR = -1.3, WALL = -2.2;
   const mat = {
@@ -32,12 +33,50 @@
     const m = mat.fromQuatPos(q, p);
     return [{ getPose(){ return { transform: tf(m) }; } }];
   }
+  const PILLAR = { x0: 0.25, x1: 0.35, z0: -1.75, z1: -1.65 };
+  function castWorld(o, d) {
+    let t = Infinity;
+    if (d[1] < -1e-4) t = Math.min(t, (FLOOR - o[1]) / d[1]);
+    if (d[2] < -1e-4) t = Math.min(t, (WALL - o[2]) / d[2]);
+    // Slab test against the pillar (infinite in y).
+    let tmin = -Infinity, tmax = Infinity;
+    for (const [oi, di, a, b] of [[o[0], d[0], PILLAR.x0, PILLAR.x1], [o[2], d[2], PILLAR.z0, PILLAR.z1]]) {
+      if (Math.abs(di) < 1e-9) { if (oi < a || oi > b) { tmin = Infinity; } continue; }
+      let t1 = (a - oi) / di, t2 = (b - oi) / di; if (t1 > t2) [t1, t2] = [t2, t1];
+      tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
+    }
+    if (tmin <= tmax && tmin > 0) t = Math.min(t, tmin);
+    return t;
+  }
+  window.__depthCalls = 0;
+  function depthInfo() {
+    const W = 90, H = 160;
+    const f = 1 / Math.tan(30 * Math.PI / 180), aspect = innerWidth / innerHeight;
+    const fwd = rot(viewerQ, [0, 0, -1]);
+    const meters = (u, v) => {
+      const dir = rot(viewerQ, [((u * 2 - 1) * aspect) / f, (1 - v * 2) / f, -1]);
+      const len = Math.hypot(dir[0], dir[1], dir[2]);
+      const dn = [dir[0] / len, dir[1] / len, dir[2] / len];
+      const t = castWorld(viewerP, dn);
+      if (window.__depthOverride) return window.__depthOverride;
+      if (!isFinite(t)) return 0;
+      return t * (dn[0] * fwd[0] + dn[1] * fwd[1] + dn[2] * fwd[2]);
+    };
+    const data = new Uint16Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) data[y * W + x] = Math.round(meters((x + 0.5) / W, (y + 0.5) / H) * 1000);
+    window.__depthCalls++;
+    return {
+      width: W, height: H, rawValueToMeters: 0.001, data: data.buffer,
+      normDepthBufferFromNormView: { matrix: new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]) },
+      getDepthInMeters: (u, v) => meters(u, v),
+    };
+  }
   class Session extends EventTarget {
-    constructor(){ super(); this.renderState={baseLayer:null,depthNear:0.1,depthFar:1000,layers:undefined}; this.inputSources=[]; this.environmentBlendMode='alpha-blend'; this.enabledFeatures=['hit-test','dom-overlay']; this.raf=new Map(); this.id=0; }
+    constructor(){ super(); this.renderState={baseLayer:null,depthNear:0.1,depthFar:1000,layers:undefined}; this.inputSources=[]; this.environmentBlendMode='alpha-blend'; this.enabledFeatures=['hit-test','dom-overlay','depth-sensing']; this.raf=new Map(); this.id=0; }
     updateRenderState(s){ Object.assign(this.renderState, s); }
     async requestReferenceSpace(t){ return new Space(t); }
     async requestHitTestSource({offsetRay}){ return { dir: offsetRay ? offsetRay.direction : {x:0,y:0,z:-1}, cancel(){} }; }
-    requestAnimationFrame(cb){ const id=++this.id; const h=requestAnimationFrame((t)=>{ const frame={ session:this, getViewerPose:()=>{ const t2=viewerTf(); return { transform:t2, views:[{ eye:'none', projectionMatrix:proj, transform:t2, recommendedViewportScale:null }] }; }, getHitTestResults:(s)=>hit(s), getPose:()=>({transform:viewerTf()}) }; cb(t, frame); }); this.raf.set(id,h); return id; }
+    requestAnimationFrame(cb){ const id=++this.id; const h=requestAnimationFrame((t)=>{ const frame={ session:this, getViewerPose:()=>{ const t2=viewerTf(); return { transform:t2, views:[{ eye:'none', projectionMatrix:proj, transform:t2, recommendedViewportScale:null }] }; }, getHitTestResults:(s)=>hit(s), getDepthInformation:()=>depthInfo(), getPose:()=>({transform:viewerTf()}) }; cb(t, frame); }); this.raf.set(id,h); return id; }
     cancelAnimationFrame(id){ cancelAnimationFrame(this.raf.get(id)); }
     async end(){ this.dispatchEvent(new Event('end')); }
   }

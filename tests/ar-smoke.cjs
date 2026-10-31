@@ -10,6 +10,7 @@ const path = require('path');
   const page = await browser.newPage({ viewport: { width: 412, height: 860 } });
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
   await page.addInitScript({ content: fs.readFileSync(path.join(__dirname, 'xr-mock.js'), 'utf8') });
   await page.goto(process.env.URL ?? 'http://localhost:4173/?debug');
   await page.click('#btn-ar');
@@ -18,6 +19,7 @@ const path = require('path');
     await page.evaluate((i) => window.__xrPose(Math.sin(i * 0.4) * 0.5, -0.75), i);
   }
   const roaches = await page.evaluate(() => window.__roaches());
+  if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
   console.log((await page.textContent('#debug')).replace(/\n/g, ' | '));
   await browser.close();
   if (errors.length || roaches < 4) {

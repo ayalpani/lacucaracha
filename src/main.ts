@@ -12,10 +12,13 @@ import {
   SRGBColorSpace,
   Vector3,
   WebGLRenderer,
+  PMREMGenerator,
   Color,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { RoachAudio } from './audio';
+import { occlusionUniforms } from './occlusion';
 import { RoachRenderer } from './roachRenderer';
 import { SurfelMap, type SurfaceSample } from './surfaces';
 import { Swarm } from './swarm';
@@ -64,8 +67,14 @@ renderer.xr.enabled = true;
 const scene = new Scene();
 const camera = new PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 50);
 
-const hemi = new HemisphereLight(0xfff4e6, 0x3a2a1c, 1.6);
-const sun = new DirectionalLight(0xffffff, 1.4);
+// Soft studio reflections once at startup: gives the chitin its wet-looking gloss.
+const pmrem = new PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.55;
+pmrem.dispose();
+
+const hemi = new HemisphereLight(0xfff4e6, 0x3a2a1c, 1.0);
+const sun = new DirectionalLight(0xffffff, 1.3);
 sun.position.set(0.5, 2, 0.8);
 const ambient = new AmbientLight(0xffffff, 0.2);
 scene.add(hemi, sun, ambient);
@@ -146,9 +155,12 @@ async function startAr(): Promise<void> {
     session = await xr.requestSession('immersive-ar', {
       requiredFeatures: ['hit-test'],
       // No light estimation: its reflection cube maps cost far too much on mid-range phones.
-      optionalFeatures: ['dom-overlay', 'plane-detection'],
+      optionalFeatures: ['dom-overlay', 'plane-detection', 'depth-sensing'],
       domOverlay: { root: ui.hud },
+      // ARCore depth map: lets roaches use real shapes (chair legs …) and hide behind furniture.
+      depthSensing: { usagePreference: ['cpu-optimized'], dataFormatPreference: ['luminance-alpha', 'float32'] },
     });
+    hideDepthFromThree(session);
   } catch (err) {
     ui.arHint.textContent = `AR konnte nicht starten: ${(err as Error).message}`;
     return;
@@ -180,6 +192,16 @@ async function startAr(): Promise<void> {
   }
 
   enterHud(false);
+}
+
+/**
+ * three.js r170 only handles GPU depth (via XRWebGLBinding) and crashes on Chrome
+ * Android's CPU depth. We read depth ourselves, so hide the feature from three.
+ */
+function hideDepthFromThree(s: XRSession): void {
+  const features = s.enabledFeatures;
+  if (!features?.includes('depth-sensing')) return;
+  Object.defineProperty(s, 'enabledFeatures', { value: features.filter((f) => f !== 'depth-sensing'), configurable: true });
 }
 
 function startDemo(): void {
@@ -268,6 +290,7 @@ function tick(now: number, dt: number, frame: XRFrame | null): void {
 
   swarm.update(dt, camPos);
   roachView.update(swarm.roaches);
+  updateOcclusion();
 
   // Audio params don't need 60 Hz updates; fewer automation events = no crackle.
   audioAccum += dt;
@@ -290,11 +313,21 @@ function tick(now: number, dt: number, frame: XRFrame | null): void {
       const st = arWorld?.stats;
       ui.debug.textContent =
         `${fps.toFixed(0)} fps · Flächenpunkte ${map.size}` +
-        (st ? ` · Hits ${st.hitsLastFrame}/${st.sources} · Ebenen ${st.planes}` : '') +
+        (st ? ` · Hits ${st.hitsLastFrame}/${st.sources} · Ebenen ${st.planes} · Tiefe ${st.depth ? `ja (${st.depthSamples})` : 'nein'}` : '') +
         ` · Tiere ${n}` +
         (lastErr ? `\n⚠ ${lastErr}` : st?.error ? `\n⚠ ${st.error}` : '');
     }
   }
+}
+
+function updateOcclusion(): void {
+  const depth = arWorld?.depth;
+  const on = !!depth?.active && !!depth.texture;
+  occlusionUniforms.uDepthOn.value = on ? 1 : 0;
+  if (!on) return;
+  occlusionUniforms.uDepthTex.value = depth!.texture;
+  occlusionUniforms.uDepthUv.value.copy(depth!.uvTransform);
+  renderer.getDrawingBufferSize(occlusionUniforms.uResolution.value);
 }
 
 function showError(err: unknown): void {
@@ -399,4 +432,8 @@ ui.btnExit.addEventListener('click', () => {
   camera.position.set(x, y, z);
   controls?.target.set(tx, ty, tz);
   controls?.update();
+};
+(window as unknown as { __roachAt: (i: number) => number[] }).__roachAt = (i) => {
+  const r = swarm.roaches[i];
+  return r ? [...r.position.toArray(), ...r.normal.toArray(), ...r.heading.toArray()] : [];
 };

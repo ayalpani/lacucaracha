@@ -37,9 +37,10 @@ export interface SwarmOptions {
 }
 
 const UP = new Vector3(0, 1, 0);
-const SUPPORT_RADIUS = 0.06;
-const SEARCH_RADIUS = 0.12;
-const MAX_UNSUPPORTED = 0.14;
+const SUPPORT_RADIUS = 0.035;
+/** Surfels must be observed this often before roaches trust them (filters depth noise). */
+const MIN_HITS = 2;
+const MAX_UNSUPPORTED = 0.025;
 const FLEE_DISTANCE = 0.3;
 const SQUASH_LINGER = 10;
 
@@ -205,7 +206,7 @@ export class Swarm {
       const roll = Math.random();
       if (roll < 0.62) {
         r.mode = 'run';
-        r.targetSpeed = rand(0.08, 0.32);
+        r.targetSpeed = Math.random() < 0.3 ? rand(0.3, 0.5) : rand(0.06, 0.22);
         r.modeTime = rand(0.4, 2.8);
       } else {
         r.mode = 'pause';
@@ -221,61 +222,97 @@ export class Swarm {
       r.heading.applyAxisAngle(r.normal, r.turnRate * dt);
     }
 
-    const accel = r.targetSpeed > r.speed ? 3.5 : 6;
+    // Roaches start fast and stop dead.
+    const accel = r.targetSpeed > r.speed ? 8 : 20;
     r.speed += (r.targetSpeed - r.speed) * Math.min(1, dt * accel);
   }
 
+  /**
+   * Walk along real, observed surfaces only. Roaches never cross gaps: at the end of
+   * a surface they either go over the edge onto an adjacent surface (table edge → table
+   * side, floor → chair leg) or turn away. Near an edge they like to run along it.
+   */
   private move(r: Roach, dt: number): void {
     if (r.speed < 1e-4) return;
     const next = this.tmpB.copy(r.position).addScaledVector(r.heading, r.speed * dt);
     const support = this.map.query(next, SUPPORT_RADIUS, this.nearby);
 
-    if (support.length > 0) {
-      r.unsupported = 0;
-      // Prefer the surface we're on, unless this roach is in a climbing mood.
-      const switchPenalty = 0.01 + (1 - r.climbiness) * 0.08;
-      let best = support[0];
-      let bestScore = Infinity;
-      for (const s of support) {
-        const score = s.position.distanceTo(next) + (1 - s.normal.dot(r.normal)) * switchPenalty;
-        if (score < bestScore) {
-          bestScore = score;
-          best = s;
+    let same: Surfel | null = null;
+    let sameD = Infinity;
+    let other: Surfel | null = null;
+    let otherD = Infinity;
+    for (const s of support) {
+      if (s.hits < MIN_HITS) continue;
+      const d = s.position.distanceTo(next);
+      const agree = s.normal.dot(r.normal);
+      if (agree > 0.8) {
+        if (d < sameD) {
+          sameD = d;
+          same = s;
         }
-      }
-      // Average the plane over surfels agreeing with the best one to smooth out noise.
-      const avgP = new Vector3();
-      const avgN = new Vector3();
-      let wSum = 0;
-      for (const s of support) {
-        if (s.normal.dot(best.normal) < 0.85) continue;
-        const w = Math.min(s.hits, 8) / (s.position.distanceTo(next) + 0.01);
-        avgP.addScaledVector(s.position, w);
-        avgN.addScaledVector(s.normal, w);
-        wSum += w;
-      }
-      avgP.divideScalar(wSum);
-      avgN.normalize();
-
-      const offPlane = next.clone().sub(avgP).dot(avgN);
-      next.addScaledVector(avgN, -offPlane * Math.min(1, dt * 18));
-      this.rotateOntoNormal(r, avgN, Math.min(1, dt * 14));
-    } else {
-      r.unsupported += r.speed * dt;
-      const far = this.map.query(next, SEARCH_RADIUS, this.nearby);
-      if (far.length > 0) {
-        const target = this.tmpA.subVectors(far[(Math.random() * far.length) | 0].position, r.position);
-        target.addScaledVector(r.normal, -target.dot(r.normal));
-        if (target.lengthSq() > 1e-6) steerTowards(r, target.normalize(), dt * 10);
-      }
-      if (r.unsupported > MAX_UNSUPPORTED) {
-        // Edge of the known world: turn back.
-        r.heading.applyAxisAngle(r.normal, Math.PI + rand(-0.8, 0.8));
-        r.unsupported = 0;
-        return;
+      } else if (agree > -0.3 && d < otherD) {
+        otherD = d;
+        other = s;
       }
     }
+
+    let target: Surfel | null = same;
+    if (other) {
+      const into = r.heading.dot(other.normal); // < 0: surface faces us (wall/leg ahead); > 0: we're going over an edge
+      const wantsClimb = Math.random() < r.climbiness * dt * 6 || r.mode === 'flee';
+      if (into < -0.2) {
+        // Concave corner (floor meets wall, chair leg, cabinet).
+        if (wantsClimb && otherD < 0.03) target = other;
+        else this.followEdge(r, other.normal, dt);
+      } else if (!same && into > 0.2) {
+        // Convex edge (end of a table top): over the edge, or turn.
+        if (wantsClimb || Math.random() < r.climbiness * 0.5) target = other;
+      } else if (Math.random() < 0.5) {
+        this.followEdge(r, other.normal, dt);
+      }
+    }
+
+    if (!target) {
+      // Small holes in the depth data are bridged; real edges are not.
+      r.unsupported += r.speed * dt;
+      if (r.unsupported > MAX_UNSUPPORTED) {
+        r.heading.applyAxisAngle(r.normal, (Math.random() < 0.5 ? 1 : -1) * rand(1.8, 3.1));
+        r.unsupported = 0;
+        r.speed *= 0.3;
+        return;
+      }
+      r.position.copy(next);
+      return;
+    }
+    r.unsupported = 0;
+
+    // Fit a local plane to the surfels agreeing with the chosen one.
+    const avgP = this.tmpA.set(0, 0, 0);
+    const avgN = new Vector3();
+    let wSum = 0;
+    for (const s of support) {
+      if (s.hits < MIN_HITS || s.normal.dot(target.normal) < 0.85) continue;
+      const w = Math.min(s.hits, 8) / (s.position.distanceTo(next) + 0.01);
+      avgP.addScaledVector(s.position, w);
+      avgN.addScaledVector(s.normal, w);
+      wSum += w;
+    }
+    avgP.divideScalar(wSum);
+    avgN.normalize();
+    const switching = target !== same;
+    const offPlane = next.clone().sub(avgP).dot(avgN);
+    next.addScaledVector(avgN, -offPlane * (switching ? 1 : Math.min(1, dt * 18)));
     r.position.copy(next);
+    this.rotateOntoNormal(r, avgN, switching ? 1 : Math.min(1, dt * 14));
+  }
+
+  /** Run along the line where the current surface meets another (baseboards, table legs, edges). */
+  private followEdge(r: Roach, otherNormal: Vector3, dt: number): void {
+    const edge = this.tmpA.crossVectors(r.normal, otherNormal);
+    if (edge.lengthSq() < 1e-6) return;
+    edge.normalize();
+    if (edge.dot(r.heading) < 0) edge.negate();
+    steerTowards(r, edge, dt * 10);
   }
 
   /** Tilt the roach towards a new surface normal, carrying its heading over the edge. */

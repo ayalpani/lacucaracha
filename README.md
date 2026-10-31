@@ -22,15 +22,19 @@ npm run build     # Typecheck + Build nach dist/
 AR auf dem Handy direkt vom Mac testen (WebXR braucht HTTPS oder localhost):
 USB-Debugging am A54 an, in Chrome am Mac `chrome://inspect` → *Port forwarding* `5173 → localhost:5173`, dann am Handy `http://localhost:5173` öffnen.
 
+## Tests
+
+`npm run build && npx vite preview --port 4173` und dann `npm run test:ar`: simuliertes AR-Handy (Boden, Wand, Säule, Hit-Tests, Tiefendaten).
+
 ## Wie es funktioniert
 
 - `src/worlds.ts`: Ein Fächer aus 30 WebXR-Hit-Tests (ARCore-Ebenen, waagrecht und senkrecht) tastet bei jedem Frame die Umgebung ab. Der Demo-Raum macht dasselbe mit Raycasts.
+- `src/depth.ts`: Liest die ARCore-Tiefenkarte (WebXR Depth Sensing), macht daraus Flächenstücke für beliebige Formen (Stuhlbeine, Sofa, Blumentopf) und eine Tiefentextur, mit der Kakerlaken hinter echten Möbeln verdeckt werden (`src/occlusion.ts`).
 - `src/surfaces.ts`: Die Treffer landen in einer Voxel-Karte aus kleinen Flächenstücken („Surfels“) mit Position und Normale.
-- `src/swarm.ts`: Jede Kakerlake läuft auf dieser Karte, wechselt an Kanten auf Wände/Möbelseiten, flieht vor dem Handy, legt Pausen ein und vermehrt sich (ca. alle 9 s pro erwachsenem Tier, max. 220).
+- `src/swarm.ts`: Jede Kakerlake läuft nur auf beobachteten Flächen (keine Sprünge durch die Luft), läuft gern an Kanten entlang, klettert an Wänden/Möbelbeinen hoch, wenn sie sie berührt, flieht vor dem Handy, legt Pausen ein und vermehrt sich (ca. alle 9 s pro erwachsenem Tier, max. 220).
 - `src/roachRenderer.ts`: Prozedurales 3D-Modell mit Dreifuß-Gang, tastenden Fühlern, Kontaktschatten. Alles über wenige Instanced Meshes, damit 200+ Tiere flüssig laufen.
 - `src/audio.ts`: Alle Geräusche werden synthetisiert (Krabbeln räumlich per HRTF, Schwarm-Rascheln, Fauchen, Zerquetschen).
 
 ## Nächste Schritte
 
-- Verdeckung durch echte Möbel (WebXR Depth Sensing bzw. ARCore Depth API)
 - Native App mit Unity AR Foundation für Android und iOS (Play Store / App Store)
