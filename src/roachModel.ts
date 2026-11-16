@@ -7,6 +7,7 @@ import {
   Mesh,
   MeshStandardMaterial,
   Vector3,
+  type InterleavedBufferAttribute,
   type Material,
   type Object3D,
 } from 'three';
@@ -121,6 +122,7 @@ function cleanGeometry(src: BufferGeometry, world: Matrix4): BufferGeometry {
   g.setAttribute('position', src.attributes.position.clone());
   if (src.attributes.normal) g.setAttribute('normal', src.attributes.normal.clone());
   if (src.attributes.uv) g.setAttribute('uv', src.attributes.uv.clone());
+  if (src.attributes.color) g.setAttribute('color', toRgb(src.attributes.color));
   if (src.index) g.setIndex(src.index.clone());
   g.applyMatrix4(world);
   if (!g.attributes.normal) g.computeVertexNormals();
@@ -128,11 +130,28 @@ function cleanGeometry(src: BufferGeometry, world: Matrix4): BufferGeometry {
   return g;
 }
 
+/** COLOR_0 may be RGBA or normalised integers: make it float RGB. */
+function toRgb(a: BufferAttribute | InterleavedBufferAttribute): BufferAttribute {
+  const f = new Float32Array(a.count * 3);
+  for (let i = 0; i < a.count; i++) {
+    f[i * 3] = a.getX(i);
+    f[i * 3 + 1] = a.getY(i);
+    f[i * 3 + 2] = a.getZ(i);
+  }
+  return new BufferAttribute(f, 3);
+}
+
 function mergeAll(geos: BufferGeometry[]): BufferGeometry {
   if (geos.length === 1) return geos[0];
   // mergeGeometries needs all-indexed or all-non-indexed.
   const mixed = geos.some((g) => g.index) && geos.some((g) => !g.index);
   const list = mixed ? geos.map((g) => (g.index ? g.toNonIndexed() : g)) : geos;
+  // Vertex colours: all or none, else mergeGeometries refuses.
+  if (list.some((g) => g.attributes.color) && list.some((g) => !g.attributes.color)) {
+    for (const g of list) {
+      if (!g.attributes.color) g.setAttribute('color', new Float32BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(1), 3));
+    }
+  }
   // Normalised (quantised) attributes don't merge with float ones: convert to float.
   for (const g of list) {
     for (const key of Object.keys(g.attributes)) {

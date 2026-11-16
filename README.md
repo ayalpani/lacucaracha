@@ -57,4 +57,4 @@ im Vertex-Shader. Falsch herum? `setOrientation(name, { yaw, pitch })` (Vierteld
 Weg vom Bild zum Modell:
 1. Konzeptbild mit einem Bild-Modell erzeugen (einzelne Kakerlake, 3/4-Ansicht von oben, neutraler Hintergrund).
 2. Image-to-3D: z. B. Meshy (meshy.ai), Tripo (tripo3d.ai) oder Hunyuan3D. Low-poly ~5.000 Dreiecke, Textur an, Export GLB.
-3. Datei als `public/models/roach.glb` committen. Test-Modell zum Ausprobieren: `node tests/make-test-glb.mjs out.glb`.
+3. Datei als `public/models/roach.glb` committen. Das aktuelle Standardmodell erzeugt `node tools/build-roach-glb.mjs` (anatomisch modelliert, ~4.700 Dreiecke). Test-Modell zum Ausprobieren: `node tests/make-test-glb.mjs out.glb`.
